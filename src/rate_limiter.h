@@ -96,7 +96,7 @@ class RateLimiter {
   /// start building the payload. force_non_blocking option can be set to True
   /// to allow function to return back with availability.
   /// \param model The pointer to TritonModel object to query for.
-  /// \param model_instance The pointer to TritonMode
+  /// \param model_instance The pointer to TritonModel
   /// \param support_prefetching Whether or not pre-fetching of payloads is
   /// enabled.
   /// \param force_non_blocking When set true, function will not block for

@@ -30,6 +30,7 @@
 #include "server_message.h"
 #include "shared_library.h"
 #include "triton/common/logging.h"
+#include <iostream>
 
 // For unknown reason, windows will not export the TRITONBACKEND_*
 // functions declared with dllexport in tritonbackend.h. To get those
@@ -231,6 +232,10 @@ extern "C" {
 TRITONAPI_DECLSPEC TRITONSERVER_Error*
 TRITONBACKEND_ApiVersion(uint32_t* major, uint32_t* minor)
 {
+  // MODIFIED
+  std::cout<<"executed here." <<std::endl;
+  // MODIFIED END
+  
   *major = TRITONBACKEND_API_VERSION_MAJOR;
   *minor = TRITONBACKEND_API_VERSION_MINOR;
   return nullptr;  // success
