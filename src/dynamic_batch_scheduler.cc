@@ -387,7 +387,11 @@ DynamicBatchScheduler::BatcherThread(const int nice)
                 if (preserve_ordering_ || response_cache_enabled_) {
                   DelegateResponse(request);
                 }
+
+                // here we push the request to the payload
                 curr_payload_->AddRequest(std::move(request));
+
+                
               } else {
                 // The queue is empty which conflicts with pending batch
                 // count. Send the current batch if any and reset related

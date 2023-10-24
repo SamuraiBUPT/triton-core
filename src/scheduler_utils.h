@@ -131,7 +131,9 @@ class PriorityQueue {
   void SetCursorToMark() { pending_cursor_ = current_mark_; }
 
   // Whether the cursor is still valid. The cursor is valid only if the pending
-  // batch is unchanged.
+  // batch is unchanged. ResetCursor() will compute the time since the program 
+  // epoch and compare with the pending_batch_closest_timeout_ns_. For example,
+  // if the the cursor is not valid, then the since_epoch_time > closet_time.
   bool IsCursorValid();
 
   // Return the oldest queued time of requests in pending batch.

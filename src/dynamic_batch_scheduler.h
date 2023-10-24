@@ -100,9 +100,18 @@ class DynamicBatchScheduler : public Scheduler {
       const uint64_t priority_levels,
       const ModelQueuePolicyMap& queue_policy_map);
 
+  /// @brief form a batch thread
+  /// @param nice 
   void BatcherThread(const int nice);
+
+  /// @brief add a new payload
   void NewPayload();
+
+  /// @brief Check if the batch should be executed.
+  /// @return 0 if the batch should be executed, else return the waiting time.
   uint64_t GetDynamicBatch();
+
+
   void DelegateResponse(std::unique_ptr<InferenceRequest>& request);
   void CacheLookUp(
       std::unique_ptr<InferenceRequest>& request,
@@ -147,6 +156,9 @@ class DynamicBatchScheduler : public Scheduler {
   std::shared_ptr<RateLimiter> rate_limiter_;
 
   std::shared_ptr<Payload> curr_payload_;
+
+  /// the flag for current payload saturation. If the current payload is saturated,
+  /// a new payload will be created through NewPayload().
   bool payload_saturated_;
 
   size_t max_batch_size_;

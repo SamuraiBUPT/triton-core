@@ -3080,6 +3080,8 @@ TRITONSERVER_ServerMetrics(
 #endif  // TRITON_ENABLE_METRICS
 }
 
+/// This function will push the request into the Queue managed by 
+/// the scheduler, which is managed by Model.
 TRITONAPI_DECLSPEC TRITONSERVER_Error*
 TRITONSERVER_ServerInferAsync(
     TRITONSERVER_Server* server,

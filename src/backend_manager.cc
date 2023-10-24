@@ -232,10 +232,6 @@ extern "C" {
 TRITONAPI_DECLSPEC TRITONSERVER_Error*
 TRITONBACKEND_ApiVersion(uint32_t* major, uint32_t* minor)
 {
-  // MODIFIED
-  std::cout<<"executed here." <<std::endl;
-  // MODIFIED END
-  
   *major = TRITONBACKEND_API_VERSION_MAJOR;
   *minor = TRITONBACKEND_API_VERSION_MINOR;
   return nullptr;  // success

@@ -70,6 +70,10 @@ class InferenceRequest {
     // but hasn't been released yet.
     EXECUTING,
 
+    // The request has generated several tokens, but not finished yet. It will be stored
+    // in the queue for a while.
+    INFLIGHT,
+
     // The request has been released.
     RELEASED
   };
@@ -381,6 +385,7 @@ class InferenceRequest {
   // execution completes (and those modifications will apply to the
   // next inference execution).
   Status MutableOriginalInput(const std::string& name, Input** input);
+  
   std::unordered_map<std::string, Input>* MutableOriginalInputs()
   {
     return &original_inputs_;
