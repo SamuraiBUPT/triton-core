@@ -122,6 +122,7 @@ set(
   cache_manager.cc
   cuda_utils.cc
   dynamic_batch_scheduler.cc
+  inflight_batch_scheduler.cc
   ensemble_scheduler.cc
   ensemble_utils.cc
   filesystem/api.cc
@@ -168,6 +169,7 @@ set(
   constants.h
   cuda_utils.h
   dynamic_batch_scheduler.h
+  inflight_batch_scheduler.h
   ensemble_scheduler.h
   ensemble_utils.h
   filesystem/api.h

@@ -315,6 +315,8 @@ InflightBatchScheduler::BatcherThread(const int nice)
             // we will add all pending requests to curr_payload
             for (size_t idx = 0; idx < pending_batch_queue_cnt; idx++) {
               std::unique_ptr<InferenceRequest> request;
+
+              // TODO: here is not dequeue, need to modify
               auto status = queue_.Dequeue(&request);
               if (status.IsOk()) {
                 if (preserve_ordering_ || response_cache_enabled_) {
@@ -404,12 +406,324 @@ InflightBatchScheduler::GetInflightBatch()
     pending_batch_size_ = 0;
   }
   size_t best_preferred_batch_size = 0;
+
+  // reduce the rejected or cancelled requests.
   queued_batch_size_ -= queue_.ApplyPolicyAtCursor();
 
+  // When there is optional input or input shape must be enforced,
+  // the inputs in the requests must be examined for forming a batch
+  const bool check_input = !enforce_equal_shape_tensors_.empty() ||
+                           has_optional_input_;
+  auto payload_batch_size = curr_payload_->BatchSize(); 
+  while(!queue_CursorEnd()) {
+    // now we are adding each request.
+
+    const auto batch_size = std::max(1U, queue_.RequestAtCursor()->BatchSize());
+
+    if ((payload_batch_size + queue_.PendingBatchCount()) == 0) {
+      // If there is no pending batch, then this request is starting a
+      // new batch.
+      // Get the shape of the new batch that is being started...
+      if (check_input) {
+        if (!curr_payload_->MutableRequiredEqualInputs()
+                 ->Initialize(
+                     queue_.RequestAtCursor(), enforce_equal_shape_tensors_,
+                     has_optional_input_)
+                 .IsOk()) {
+          send_now = true;
+          break;
+        }
+      }
+    } else {
+      // There is a pending batch, situation 1: the batch is full.
+      // 
+      // adding this request would make the batch size larger than all of 
+      // the preferred batch sizes,
+      // so mark the cursor at this point. Not sending the pending batch so
+      // that we can examine the queue delay of requests that fits in a batch.
+      if (((payload_batch_size + pending_batch_size_ + batch_size) >
+           max_preferred_batch_size_) && (best_preferred_batch_size == 0)) {
+        best_preferred_batch_size = pending_batch_size_;
+        queue_.MarkCursor();
+        payload_saturated_ = true;
+      }
+      if((payload_batch_size + pending_batch_size_ + batch_size) >
+          max_batch_size_) {
+        send_now = true;
+        break;
+      }
+
+      // There is a pending batch, situation 2: shape change.
+      //
+      // the batch has a different shape if adding this request, so send 
+      // the pending batch as it is.
+      if (check_input &&
+          !curr_payload_->MutableRequiredEqualInputs()->HasEqualInputs(
+              queue_.RequestAtCursor())) {
+        curr_payload_->MarkSaturated();
+        send_now = true;
+        break;
+      }
+    }
+
+    pending_batch_size_ += batch_size;   // add this request count to bs
+    queue_.AdvanceCursor();             // move the cursor to next request
+    queued_batch_size_ -= queue_.ApplyPolicyAtCursor();  
+
+    if (preferred_batch_sizes_.find(pending_batch_size_ + payload_batch_size) !=
+        preferred_batch_sizes_.end()) {
+      best_preferred_batch_size = pending_batch_size_;
+      queue_.MarkCursor();
+    }
+  } // examine request loop end
+
+  // Time Computing
+  // Obtain the age of the oldest pending request to compare with the maximum
+  // batch queuing delay.
+  uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+  uint64_t delay_ns = now_ns - queue_.OldestEnqueueTime();
+  bool delay_is_exceeded =
+      (pending_batch_delay_ns_ != 0) && (delay_ns >= pending_batch_delay_ns_);
+
+  // If we found a preferred batch size and the queue delay hasn't
+  // been exceeded, then execute that.
+  if ((best_preferred_batch_size != 0) && !delay_is_exceeded) {
+    if (pending_batch_delay_ns_ == 0) {
+      payload_saturated_ = true;
+    }
+    pending_batch_size_ = best_preferred_batch_size;
+    queue_.SetCursorToMark();
+    return 0;
+  }
+
+  // No request in pending batch happens when all queued requests have expired
+  // timeout and the policies are REJECT
+  if (queue_.PendingBatchCount() == 0) {
+    return 0;
+  }
+
+  // if the current batch can't grow any larger then just immediately 
+  // execute whatever is pending.
+  if (send_now || ((payload_batch_size + pending_batch_size_) >=
+                   max_preferred_batch_size_)) {
+    payload_saturated_ = true;
+    return 0;
+  }
+
+  // If the delay has been exceeded
+  if (delay_is_exceeded || (pending_batch_delay_ns_ == 0)) {
+    return 0;
+  }
+
+  // Set the next preferred batch size given the pending batch size
+  auto next_preferred_batch_size_it = preferred_batch_sizes_.upper_bound(
+      pending_batch_size_ + payload_batch_size);
+
+  if (next_preferred_batch_size_it != preferred_batch_sizes_.end()) {
+    next_preferred_batch_size_ = *next_preferred_batch_size_it;
+  } else {
+    next_preferred_batch_size_ =
+        preferred_batch_sizes_.empty() ? 0 : *preferred_batch_sizes_.begin();
+  }
+
+  if (next_preferred_batch_size_ != 0) {
+    next_preferred_batch_size_ -= payload_batch_size;
+  }
+
+
+  // By this point, we have not seen the pending batch that should be executed
+  // immediately. However, if we have scheduled a payload that can be grown and
+  // not yet in preferred batch size, we should move the pending batch over to
+  // ensure the model instance will pick up largest available batch even if it
+  // is not the preferred batch.
+  if (!payload_saturated_ && (payload_batch_size != 0) &&
+      (preferred_batch_sizes_.find(payload_batch_size) ==
+       preferred_batch_sizes_.end())) {
+    return 0;
+  }
+
+  uint64_t wait_ns = pending_batch_delay_ns_ - delay_ns;
+  // Note that taking request timeout into consideration allows us to reset
+  // pending batch as soon as it is invalidated. But the cost is that in edge
+  // case where the timeout will be expired one by one, the thread will be
+  // waken frequently.
+  if (queue_.ClosestTimeout() != 0) {
+    if (now_ns <= queue_.ClosestTimeout()) {
+      wait_ns = std::min(queue_.ClosestTimeout() - now_ns, wait_ns);
+    } else {
+      // A request in pending batch is timed-out, wait for 1 us to force the
+      // thread to reset the pending batch right the way.
+      wait_ns = 1000;
+    }
+  }
+
+  // Return non-zero wait microseconds to cause this thread to wait
+  // until the queue delay or the closest timeout has expired.
+  // Another thread may be awaken due to incoming request to handle the
+  // pending batch before this thread wakes and that is ok. But if no other
+  // request comes in then this thread will wake and revisit the pending batch
+  // (and at that time will then see the delay has been exceeded and will send
+  // the batch).
+  return wait_ns / 1000;
 }
 
+void
+InflightBatchScheduler::DelegateResponse(
+    std::unique_ptr<InferenceRequest>& request)
+{
+  std::lock_guard<std::mutex> lock(completion_queue_mtx_);
+  completion_queue_.emplace_back();
+  auto queue_slot = &completion_queue_.back();
+  // Cache plumbing
+  const std::string& key = request->CacheKey();
+  const bool is_key_set = request->CacheKeyIsSet();
+  const uint64_t lookup_end_ns = request->CacheLookupEndNs();
+  const uint64_t lookup_start_ns = request->CacheLookupStartNs();
 
+  request->SetResponseDelegator(
+      [this, queue_slot, key, is_key_set, lookup_end_ns, lookup_start_ns](
+          std::unique_ptr<InferenceResponse>&& response, const uint32_t flags) {
+        if (response_cache_enabled_) {
+          // Logical error, the key should be set if caching is enabled
+          // for this model
+          if (!is_key_set) {
+            LOG_ERROR << "Request cache key was not set correctly.";
+          }
 
+          // Cache insertion happens here because we need the backend to have
+          // computed the inference response first in the case of cache miss
+          auto cache = model_->Server()->CacheManager()->Cache();
+
+#ifdef TRITON_ENABLE_STATS
+          const uint64_t insert_start_ns = CaptureTimeNs();
+#endif  // TRITON_ENABLE_STATS
+
+          auto status = cache->Insert(response.get(), key);
+
+#ifdef TRITON_ENABLE_STATS
+          const uint64_t insert_end_ns = CaptureTimeNs();
+#endif  // TRITON_ENABLE_STATS
+
+          bool cache_miss =
+              (status.StatusCode() != Status::Code::ALREADY_EXISTS);
+          if (cache_miss) {
+#ifdef TRITON_ENABLE_STATS
+            uint64_t lookup_ns = lookup_end_ns - lookup_start_ns;
+            // Logical error, this shouldn't happen
+            if (lookup_start_ns > lookup_end_ns) {
+              lookup_ns = 0;
+              LOG_ERROR << "Request lookup duration was not set correctly.";
+            }
+
+            uint64_t insert_ns = insert_end_ns - insert_start_ns;
+            uint64_t cache_miss_ns = lookup_ns + insert_ns;
+            // Use model_ to update stats directly because request object can be
+            // released by the backend before getting to this callback.
+            model_->MutableStatsAggregator()->UpdateSuccessCacheMiss(
+                model_->MetricReporter().get(), cache_miss_ns);
+#endif  // TRITON_ENABLE_STATS
+            if (!status.IsOk()) {
+              LOG_ERROR << "Failed to insert key [" << key
+                        << "] into response cache: " << status.Message();
+            }
+          }  // Otherwise do nothing; we update cache hit statistics on Lookup
+        }
+
+        if (preserve_ordering_) {
+          {
+            std::lock_guard<std::mutex> lock(completion_queue_mtx_);
+            queue_slot->emplace_back(std::move(response), flags);
+          }
+          FinalizeResponses();
+        } else {
+          InferenceResponse::Send(std::move(response), flags);
+        }
+      });
+}
+
+void
+InflightBatchScheduler::CacheLookUp(
+    std::unique_ptr<InferenceRequest>& request,
+    std::unique_ptr<InferenceResponse>& cached_response)
+{
+  Status status;
+  auto cache = model_->Server()->CacheManager()->Cache();
+  std::unique_ptr<InferenceResponse> local_response;
+  request->ResponseFactory()->CreateResponse(&local_response);
+  // Hash request into cache key
+  std::string key = "";
+  if (!request->CacheKeyIsSet()) {
+    status = cache->Hash(*request, &key);
+    if (!status.IsOk()) {
+      LOG_ERROR << "Failed to hash request: " << status.Message();
+      return;
+    }
+    request->SetCacheKey(key);
+  } else {
+    key = request->CacheKey();
+  }
+
+  // Lookup and capture timestamps
+  {
+    request->CaptureCacheLookupStartNs();
+    status = cache->Lookup(local_response.get(), key);
+    request->CaptureCacheLookupEndNs();
+  }
+
+  if (status.IsOk() && (local_response != nullptr)) {
+    cached_response = std::move(local_response);
+#ifdef TRITON_ENABLE_STATS
+    // Update model metrics/stats on cache hits
+    // Backends will update metrics as normal on cache misses
+    request->ReportStatisticsCacheHit(model_->MetricReporter().get());
+#endif  // TRITON_ENABLE_STATS
+  }
+}
+
+void
+InflightBatchScheduler::FinalizeResponses()
+{
+  // Need exclusive access of the function to ensure responses are sent
+  // in order
+  std::lock_guard<std::mutex> lock(finalize_mtx_);
+  // Finalize the completed payloads in-order as far as possible
+  std::deque<std::pair<std::unique_ptr<InferenceResponse>, const uint32_t>>
+      responses;
+  {
+    std::lock_guard<std::mutex> queue_lock(completion_queue_mtx_);
+    while (!completion_queue_.empty() && !completion_queue_.front().empty()) {
+      bool response_complete = false;
+      for (auto& response_pair : completion_queue_.front()) {
+        // Assuming FINAL flag is set only in the last response of the request
+        response_complete =
+            ((response_pair.second & TRITONSERVER_RESPONSE_COMPLETE_FINAL) !=
+             0);
+        responses.emplace_back(std::move(response_pair));
+      }
+      if (response_complete) {
+        completion_queue_.pop_front();
+      } else {
+        completion_queue_.front().clear();
+      }
+    }
+  }
+
+  for (auto& response : responses) {
+    InferenceResponse::Send(std::move(response.first), response.second);
+  }
+}
+
+size_t
+InflightBatchScheduler::InflightInferenceCount()
+{
+  std::unique_lock<std::mutex> lock(mu_);
+  if (curr_payload_ != nullptr) {
+    return queue_.Size() + curr_payload_->RequestCount();
+  }
+  return queue_.Size();
+}
 
 
 

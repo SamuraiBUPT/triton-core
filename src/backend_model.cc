@@ -31,6 +31,7 @@
 
 #include "backend_config.h"
 #include "dynamic_batch_scheduler.h"
+#include "inflight_batch_scheduler.h"
 #include "filesystem/api.h"
 #include "model_config_utils.h"
 #include "numa_utils.h"
@@ -764,11 +765,18 @@ TritonModel::SetConfiguredScheduler(
     RETURN_IF_ERROR(SequenceBatchScheduler::Create(
         this, new_instances, enforce_equal_shape_tensors, &scheduler));
   } else if (config_.has_dynamic_batching()) {
-    // Dynamic batcher
-    RETURN_IF_ERROR(DynamicBatchScheduler::Create(
+    // // Dynamic batcher
+    // RETURN_IF_ERROR(DynamicBatchScheduler::Create(
+    //     this, nullptr, 0 /*nice*/, true /* dynamic_batching_enabled */,
+    //     config_.max_batch_size(), enforce_equal_shape_tensors,
+    //     config_.dynamic_batching(), &scheduler));
+
+    // modified
+    RETURN_IF_ERROR(InflightBatchScheduler::Create(
         this, nullptr, 0 /*nice*/, true /* dynamic_batching_enabled */,
         config_.max_batch_size(), enforce_equal_shape_tensors,
         config_.dynamic_batching(), &scheduler));
+    // end
   } else {
     // Default scheduler. Use dynamic batch scheduler (with batching
     // disabled) as the default scheduler.

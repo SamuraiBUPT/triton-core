@@ -198,7 +198,8 @@ PriorityQueue::PolicyQueue::ApplyPolicy(
       // Delay or reject request at curr_idx if it is expired.
       else if (
           (timeout_timestamp_ns_[curr_idx] != 0) &&
-          (now_nanoseconds > timeout_timestamp_ns_[curr_idx])) {
+          (now_nanoseconds > timeout_timestamp_ns_[curr_idx])) 
+      {
         if (timeout_action_ == inference::ModelQueuePolicy::DELAY) {
           delayed_queue_.emplace_back(std::move(queue_[curr_idx]));
         } else {
@@ -418,10 +419,12 @@ PriorityQueue::ApplyPolicyAtCursor()
   size_t rejected_count = 0;
   size_t cancelled_batch_size = 0;
   size_t cancelled_count = 0;
-  while (pending_cursor_.curr_it_ != queues_.end()) {
+  while (pending_cursor_.curr_it_ != queues_.end()) 
+  {
     if (!(pending_cursor_.curr_it_->second.ApplyPolicy(
             pending_cursor_.queue_idx_, &rejected_count, &rejected_batch_size,
-            &cancelled_count, &cancelled_batch_size))) {
+            &cancelled_count, &cancelled_batch_size))) 
+    {
       if (size_ > pending_cursor_.pending_batch_count_ + rejected_count +
                       cancelled_count) {
         pending_cursor_.curr_it_++;
