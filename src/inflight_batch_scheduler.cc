@@ -12,10 +12,38 @@
 #include "triton/common/model_config.h"
 #include "triton/common/nvtx.h"
 
+#pragma message("============== Inflight Batch Scheduler is included =============")
+
 namespace triton { namespace core {
+uint64_t
+CaptureTimeNs()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
+bool
+IsStaleState(Payload::State payload_state)
+{
+  return (
+      (payload_state == Payload::State::EXECUTING) ||
+      (payload_state == Payload::State::RELEASED));
+}
 
-InflightBatchScheduler(
+void
+FinishSkippedRequests(
+    std::vector<std::deque<std::unique_ptr<InferenceRequest>>>&& requests,
+    const Status& response_status)
+{
+  for (auto& queue : requests) {
+    for (auto& request : queue) {
+      InferenceRequest::RespondIfError(request, response_status, true);
+    }
+  }
+}
+
+InflightBatchScheduler::DynamicBatchScheduler(
   TritonModel* model, TritonModelInstance* model_instance,
   const bool inflight_batching_enabled, const int32_t max_batch_size,
   const std::unordered_map<std::string, bool>& enforce_equal_shape_tensors,
