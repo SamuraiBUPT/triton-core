@@ -1,49 +1,30 @@
 #include "inflight_batch_scheduler.h"
 
-#ifdef _WIN32
+#ifndef _WIN32
   #include <sys/resource.h>
   #include <sys/syscall.h>
   #include <unistd.h>
 #endif
 
 #include "constants.h"
-#incldue "server.h"
+#include "server.h"
 #include "triton/common/logging.h"
 #include "triton/common/model_config.h"
 #include "triton/common/nvtx.h"
 
+#include "dynamic_batch_scheduler.h"
+
 #pragma message("============== Inflight Batch Scheduler is included =============")
 
 namespace triton { namespace core {
-uint64_t
-CaptureTimeNs()
-{
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
 
-bool
-IsStaleState(Payload::State payload_state)
-{
-  return (
-      (payload_state == Payload::State::EXECUTING) ||
-      (payload_state == Payload::State::RELEASED));
-}
+extern uint64_t CaptureTimeNs();
+extern bool IsStaleState(Payload::State payload_state);
+extern void FinishSkippedRequests(
+        std::vector<std::deque<std::unique_ptr<InferenceRequest>>>&& requests,
+        const Status& response_status);
 
-void
-FinishSkippedRequests(
-    std::vector<std::deque<std::unique_ptr<InferenceRequest>>>&& requests,
-    const Status& response_status)
-{
-  for (auto& queue : requests) {
-    for (auto& request : queue) {
-      InferenceRequest::RespondIfError(request, response_status, true);
-    }
-  }
-}
-
-InflightBatchScheduler::DynamicBatchScheduler(
+InflightBatchScheduler::InflightBatchScheduler(
   TritonModel* model, TritonModelInstance* model_instance,
   const bool inflight_batching_enabled, const int32_t max_batch_size,
   const std::unordered_map<std::string, bool>& enforce_equal_shape_tensors,
@@ -60,9 +41,10 @@ InflightBatchScheduler::DynamicBatchScheduler(
     stop_(false), max_batch_size_((size_t)std::max(1, max_batch_size)),
     preferred_batch_sizes_(preferred_batch_sizes),
     pending_batch_delay_ns_(max_queue_delay_microseconds * 1000),
-    pending_batch_size_(0), pending_batch_queue_(0),
+    pending_batch_size_(0), queued_batch_size_(0),
+    next_preferred_batch_size_(0),
     enforce_equal_shape_tensors_(enforce_equal_shape_tensors),
-    has_optional_input(false),
+    has_optional_input_(false),
     preserve_ordering_(preserve_ordering)
 {
   rate_limiter_ = model_->Server()->GetRateLimiter();
@@ -91,6 +73,7 @@ InflightBatchScheduler::Create(
   inference::ModelDynamicBatching batcher_config;
   batcher_config.set_preserve_ordering(preserve_ordering);
   batcher_config.set_max_queue_delay_microseconds(max_queue_delay_microseconds);
+  LOG_INFO << "using in flight batch scheduler";
 
   return Create(
       model, model_instance, nice, inflight_batching_enabled, max_batch_size,
@@ -105,6 +88,11 @@ InflightBatchScheduler::Create(
       const inference::ModelDynamicBatching& batcher_config,
       std::unique_ptr<Scheduler>* scheduler)
 {
+  std::set<int32_t> preferred_batch_sizes;
+  for (const auto size : batcher_config.preferred_batch_size()) {
+    preferred_batch_sizes.insert(size);
+  }
+
   // call the construct func 
   InflightBatchScheduler* inflight_sched = new InflightBatchScheduler(
       model, model_instance, inflight_batching_enabled, max_batch_size,
@@ -158,7 +146,7 @@ InflightBatchScheduler::Enqueue(std::unique_ptr<InferenceRequest>& request)
         request->QueueStartNs());
 #ifdef TRITON_ENABLE_TRACING
     request->TraceInputTensors(
-        TRITONSERVER_TRACE_TENSOR_QUEUE_INPUT, "DynamicBatchScheduler Enqueue");
+        TRITONSERVER_TRACE_TENSOR_QUEUE_INPUT, "InflightBatchScheduler Enqueue");
 #endif  // TRITON_ENABLE_TRACING
   }
 
@@ -443,7 +431,7 @@ InflightBatchScheduler::GetInflightBatch()
   const bool check_input = !enforce_equal_shape_tensors_.empty() ||
                            has_optional_input_;
   auto payload_batch_size = curr_payload_->BatchSize(); 
-  while(!queue_CursorEnd()) {
+  while(!queue_.CursorEnd()) {
     // now we are adding each request.
 
     const auto batch_size = std::max(1U, queue_.RequestAtCursor()->BatchSize());

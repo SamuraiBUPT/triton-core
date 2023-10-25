@@ -165,7 +165,7 @@ if(NOT TRITON_CORE_HEADERS_ONLY)
   set(TRITON_EXTRA_LIB_PATHS "" CACHE PATH "Extra library paths for Triton Server build")
 
   # Ensemble
-  option(TRITON_ENABLE_ENSEMBLE "Include ensemble support in server" OFF)
+  option(TRITON_ENABLE_ENSEMBLE "Include ensemble support in server" ON)
 
   # Metrics
   option(TRITON_ENABLE_METRICS "Include metrics support in server" ON)
@@ -401,6 +401,10 @@ install(
   DESTINATION
     ${INSTALL_CONFIGDIR}
 )
+
+if(${TRITON_ENABLE_ENSEMBLE})
+  message(STATUS "Ensemble support enabled")
+endif() # TRITON_ENABLE_ENSEMBLE
 
 #
 # Export from build tree

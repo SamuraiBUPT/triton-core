@@ -221,6 +221,7 @@ if(${TRITON_ENABLE_GPU})
 endif() # TRITON_ENABLE_GPU
 
 if(${TRITON_ENABLE_ENSEMBLE})
+  message(STATUS "==========Ensemble support enabled in the second directory==========")
   set(
     SERVER_SRCS
     ${SERVER_SRCS}

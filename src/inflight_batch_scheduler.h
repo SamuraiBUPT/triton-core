@@ -69,7 +69,6 @@ public:
   size_t InflightInferenceCount() override;
 
   /// Override
-  bool stop_;
   void Stop() override { stop_ = true; }
 
 
@@ -109,6 +108,7 @@ private:
   // I think the request should add the state "in-flight" for
   // further management.
   PriorityQueue queue_;
+  bool stop_;
 
   // =========== variables of batcher thread ===========
   std::thread scheduler_thread_;  // one object hold one thread.
@@ -126,6 +126,8 @@ private:
 
   // =========== variables of batch info ===========
   size_t max_batch_size_;
+  size_t max_preferred_batch_size_;
+  std::set<int32_t> preferred_batch_sizes_;
   uint64_t pending_batch_delay_ns_;
   size_t pending_batch_size_;
 
@@ -161,6 +163,6 @@ private:
   // Preserves the order in which responses are finalized
   std::mutex finalize_mtx_;
 
-}
+};
 
 }}  // namespace triton::core

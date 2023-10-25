@@ -1318,8 +1318,14 @@ ValidateModelConfig(
   if (config.backend().empty()) {
     // Expect backend is not empty unless it is ensemble platform.
 #ifdef TRITON_ENABLE_ENSEMBLE
-    if (config.platform() != kEnsemblePlatform)
+    if (config.platform() != kEnsemblePlatform) {
+      LOG_INFO << "config.platform: " << config.platform();
+      LOG_INFO << "kEnsemblePlatform: " << kEnsemblePlatform;
+    }
 #endif  // TRITON_ENABLE_ENSEMBLE
+#ifndef TRITON_ENABLE_EMSEMBLE
+#pragma message("====undefined TRITON_ENABLE_ENSEMBLE====")
+#endif
       return Status(
           Status::Code::INVALID_ARG, "unexpected platform type '" +
                                          config.platform() + "' for " +

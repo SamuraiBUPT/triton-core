@@ -1346,7 +1346,7 @@ ModelRepositoryManager::InitializeModelInfo(
   } else {
     linfo->prev_mtime_ns_ = std::make_pair(0, 0);
   }
-
+  LOG_INFO << 1;
   // Set 'mtime_nsec_' and override 'model_path_' if current path is empty
   // (file override is specified)
   if (linfo->model_path_.empty()) {
@@ -1357,7 +1357,7 @@ ModelRepositoryManager::InitializeModelInfo(
     RETURN_IF_ERROR(TritonRepoAgentModel::Create(
         TRITONREPOAGENT_ARTIFACT_FILESYSTEM, "", inference::ModelConfig(),
         localize_agent, {}, &localize_agent_model));
-
+    LOG_INFO << 2;
     // Set agent model state so the repo agent can access the encoded files
     // Using const_cast here but we are safe as the RepoAgent will not
     // modify the state
@@ -1369,7 +1369,7 @@ ModelRepositoryManager::InitializeModelInfo(
     const char* location;
     TRITONREPOAGENT_ArtifactType type;
     RETURN_IF_ERROR(localize_agent_model->Location(&type, &location));
-
+    LOG_INFO << 3;
     // For file override, set 'mtime_nsec_' to minimum value so that
     // the next load without override will trigger re-load to undo
     // the override while the local files may still be unchanged.
@@ -1434,6 +1434,7 @@ ModelRepositoryManager::InitializeModelInfo(
     const auto config_path = JoinPath({linfo->model_path_, kModelConfigPbTxt});
     bool model_config_exists = false;
     RETURN_IF_ERROR(FileExists(config_path, &model_config_exists));
+    LOG_INFO << 4;
     // model config can be missing if auto fill is set
     if (autofill_ && !model_config_exists) {
       linfo->model_config_.Clear();
@@ -1451,6 +1452,7 @@ ModelRepositoryManager::InitializeModelInfo(
       TRITONREPOAGENT_ArtifactType artifact_type;
       RETURN_IF_ERROR(linfo->agent_model_list_->Back()->Location(
           &artifact_type, &location));
+          LOG_INFO << 5;
       auto latest_path = std::string(location);
       linfo->model_path_ = latest_path;
       // [TODO] should try to read the config again at the latest location?
@@ -1468,16 +1470,20 @@ ModelRepositoryManager::InitializeModelInfo(
   RETURN_IF_ERROR(GetNormalizedModelConfig(
       model_id.name_, linfo->model_path_, min_compute_capability_,
       &linfo->model_config_));
-
+  LOG_INFO << 6;
   // Note that the model inputs and outputs are not validated until
   // the model model is initialized as they may not be auto-completed
   // until model is initialized.
+  LOG_INFO << 9;
   RETURN_IF_ERROR(
       ValidateModelConfig(linfo->model_config_, min_compute_capability_));
+  LOG_INFO << 10;
   if (!autofill_) {
+    LOG_INFO << 11;
     RETURN_IF_ERROR(ValidateModelIOConfig(linfo->model_config_));
+    LOG_INFO << 12;
   }
-
+  LOG_INFO << 7;
   // If the model is mapped, update its config name based on the
   // mapping.
   if (model_mappings_.find(model_id.name_) != model_mappings_.end()) {

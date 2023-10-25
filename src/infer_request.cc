@@ -159,6 +159,13 @@ InferenceRequest::SetState(InferenceRequest::State new_state)
       }
       break;
     }
+    case InferenceRequest::State::INFLIGHT: {
+      // TODO: complete this part
+      if (new_state != InferenceRequest::State::RELEASED) {
+        return generate_error();
+      }
+      break;
+    }
     case InferenceRequest::State::RELEASED: {
       if (new_state != InferenceRequest::State::INITIALIZED) {
         // Only transition currently supported after release is to start over
